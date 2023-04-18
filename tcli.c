@@ -21,12 +21,16 @@
 
 
 #include <appf.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define MAX_CMDS		2048
 #define MAX_CMD_BUF		4096
 #define HEX_PRINT_WIDTH		16
 #define DEFAULT_CONNECT_TIMO	5
 #define DEFAULT_CMD_TIMO	10
+#define DEFAULT_PORT		23
 
 
 typedef struct _connect
@@ -109,6 +113,7 @@ void usage(void)
 	fprintf(stderr, "         -c <timo>   Specify command timeout in seconds in secs (default=%d)\n", DEFAULT_CMD_TIMO);
 	fprintf(stderr, "         -D <delim>  Specify delim char between commands (default is comma)\n");
 	fprintf(stderr, "         -t <port>   Specify server port\n");
+	fprintf(stderr, "         -u <port>   Specify server name\n");
 	fprintf(stderr, "         -p <prompt> Specify server prompt\n\n");
 	fprintf(stderr, "note: you must specify a server name or a port number and the tcli prompt string\n\n");
 	exit(1);
@@ -397,7 +402,18 @@ int main(int argc, char *argv[])
 	int   port = 0;
 	char *service = NULL;
 	char *prompt = NULL;
-	unsigned int ip = INADDR_LOOPBACK;
+	unsigned int ip = 0;
+	char *default_server_name = (char*)"localhost";
+	char *lpServerName = NULL;
+	char *servername = NULL;
+	unsigned int addr;
+	struct hostent *hp;
+	struct sockaddr_in server;
+	unsigned short usport = DEFAULT_PORT;
+	//int socket_type = DEFAULT_PROTO;
+	//int socket_type = SOCK_DGRAM;
+	//int socket_type = SOCK_STREAM;
+
 
 	mydaemon.appname = argv[0];
 	mydaemon.daemonize = 0;
@@ -407,7 +423,7 @@ int main(int argc, char *argv[])
 	mydaemon.use_syslog = 0;
 
 	/*  read command line args  */
-	while ( (ch = getopt(argc, argv, "o:t:p:T:D:c:i:l:m:svxhdn")) != -1 )
+	while ( (ch = getopt(argc, argv, "o:t:p:u:T:D:c:i:l:m:svxhdn")) != -1 )
 		switch ( ch )
 		{
 		case 'T':
@@ -443,6 +459,10 @@ int main(int argc, char *argv[])
 			break;
 		case 't':
 			port = atoi(optarg);
+			usport = port;
+			break;
+		case 'u':
+			lpServerName = optarg;
 			break;
 		case 'p':
 			prompt = optarg;
@@ -472,6 +492,39 @@ int main(int argc, char *argv[])
 	af_daemon_start();
 
 	service = strdup( argv[optind++] );
+
+	if ( ! (ip) ) {
+		if ( lpServerName == NULL ) {
+			servername = default_server_name;
+		} else {
+			servername = lpServerName;
+		}
+		//
+		// Attempt to detect if we should call gethostbyname() or
+		// gethostbyaddr()
+		if (isalpha(servername[0])) {   /* server address is a name */
+			hp = gethostbyname(servername);
+		}
+		else  { /* Convert nnn.nnn address to a usable one */
+			addr = inet_addr(servername);
+			hp = gethostbyaddr((char *)&addr,4,AF_INET);
+		}
+		memset(&server,0,sizeof(server));
+		if (hp == NULL ) {
+			int errsv = errno;
+			int herrsv = h_errno;
+			af_log_print(LOG_INFO,"Client: Cannot resolve address [%s]: Error %d, h_err = %i\n",
+				servername,errsv,herrsv);
+			af_log_print(LOG_INFO,"%s\n", hstrerror(h_errno));
+			if (h_errno == HOST_NOT_FOUND) af_log_print(LOG_INFO,"Note: on linux, ip addresses must have valid RDNS entries\n");
+			ip = server.sin_addr.s_addr = inet_addr(servername);
+			server.sin_family = AF_INET;
+		} else {
+			memcpy(&(server.sin_addr),hp->h_addr,hp->h_length);
+			server.sin_family = hp->h_addrtype;
+		}
+		server.sin_port = htons(usport);
+	}
 
 	tcli.conn.client = af_client_new( service, ip, port, prompt );
 
