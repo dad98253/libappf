@@ -47,7 +47,7 @@ int _af_client_connect_timeout( af_client_t *client, int timeout_msec )
 	addr.sin_addr.s_addr = htonl( client->ip );
 	addr.sin_port = htons( client->port );
 
-	ret = connect( client->sock, (struct sockaddr *)&addr, sizeof(addr) );
+	ret = connect( client->sock, (struct sockaddr *)&addr, (socklen_t)sizeof(addr) );
 
 	if ( ret == 0 )	   //then connect succeeded right away
 		goto done;
@@ -332,11 +332,11 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 				return AF_ERRNO;
 			}
 		}
-		else if ( rt == 0 )
-		{
-			// peer performed and order shutdown
-			return AF_SOCKET;
-		}
+//		else if ( rt == 0 )
+//		{
+//			// peer performed and order shutdown
+//			return AF_SOCKET;
+//		}
 		else // rt > 0
 		{
 			// We got something
