@@ -1,2 +1,2 @@
 # libappf
-C Application Framework Library
+C Application Framework Library for telnet
