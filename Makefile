@@ -25,10 +25,10 @@ $(DEP):%.d:%.c
 #include $(DEP)
 
 $(TCLI_APP): tcli.o
-	$(CC) -o $@ $^ -L. -lappf
+	$(CC) -o $@ $^ -L. -lappf -lm
 
 $(DAEMONIZE_APP): daemonize.o
-	$(CC) -o $@ $^ -L. -lappf
+	$(CC) -o $@ $^ -L. -lappf -lm
 
 install:
 	mkdir -p $(DESTDIR)/usr/include
