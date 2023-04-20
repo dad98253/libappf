@@ -522,9 +522,13 @@ int main(int argc, char *argv[])
 		} else {
 			memcpy(&(server.sin_addr),hp->h_addr,hp->h_length);
 			server.sin_family = hp->h_addrtype;
+			ip = ntohl(server.sin_addr.s_addr);
 		}
 		server.sin_port = htons(usport);
 	}
+
+	af_log_print(LOG_INFO, "tcli server: %s, ip = %u", service, ip);
+//	ip = INADDR_LOOPBACK;	// for debug:	test known ip address
 
 	tcli.conn.client = af_client_new( service, ip, port, prompt );
 
