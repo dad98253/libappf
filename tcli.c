@@ -260,7 +260,7 @@ void myexit(int status)
 	exit(status);
 }
 
-void handle_cmd_timeout(void *ignore)
+void handle_cmd_timeout(void *ignore)	//	where is this used??
 {
 	af_log_print(LOG_ERR, "command timeout (%d secs) expired", tcli.conn.cmd_timo);
 	myexit(1);
@@ -575,7 +575,7 @@ int main(int argc, char *argv[])
 	}
 
 	// detect the initial prompt
-	if ( af_client_get_prompt( tcli.conn.client, tcli.conn.connect_timo*1000 ) )
+	if ( af_client_get_prompt( tcli.conn.client, tcli.conn.connect_timo*1000 ) )	// Note: this is a macro for af_client_read_timeout (see appf.h)
 	{
 		af_log_print(LOG_ERR, "failed to connect to detect prompt (\"%s\") within timeout (%d secs)", tcli.conn.client->prompt, tcli.conn.connect_timo );
 		myexit(1);
