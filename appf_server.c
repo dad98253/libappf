@@ -79,7 +79,7 @@ char *af_server_get_prompt( const char *service )
 	return( prompt );
 }
 
-static int af_server_set_sockopts( int s, int server_sock )
+int af_server_set_sockopts( int s, int server_sock )
 {
 	int              val;
 	struct linger    ling;

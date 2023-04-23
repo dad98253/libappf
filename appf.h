@@ -67,8 +67,9 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
+#ifdef CJSON
 #include <cJSON.h>
-
+#endif	// CJSON
 
 #ifdef __cplusplus
 	extern "C" {
@@ -185,6 +186,8 @@ struct _af_server_cnx_s {
 	af_server_t             *server;              /* Pointer back to server struct */
 	int                      fd;                  /* Connection file descriptor */
 	FILE                    *fh;                  /* Connection file handle */
+	int                      inout;               // flag to indicate if it is a cnx as a client or server
+	af_client_t             *client;              // Pointer back to client struct
 
 };
 

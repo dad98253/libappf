@@ -143,6 +143,7 @@ void af_client_delete( af_client_t *client )
 	if ( client->service )
 	{
 		free( client->service );
+		client->service = NULL;
 	}
 
 	if ( client->sock >= 0 )
@@ -151,6 +152,7 @@ void af_client_delete( af_client_t *client )
 	}
 
 	free( client );
+	client = NULL;
 }
 
 af_client_t *af_client_new( char *service, unsigned int ip, int port, const char *prompt )
@@ -184,6 +186,7 @@ af_client_t *af_client_new( char *service, unsigned int ip, int port, const char
 				if ( !server_prompt )
 				{
 					free( client );
+					client = NULL;
 					return ( NULL );
 				}
 
@@ -322,6 +325,13 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 		// Read new data with cached data already in the buffer
 		rt = recv( cl->sock, &ptr[cl->saved_len], rlen-cl->saved_len, MSG_DONTWAIT );
 		af_log_print(APPF_MASK_CLIENT+LOG_DEBUG, "recv returned %d, for read max %d", rt, rlen-cl->saved_len );
+#ifdef TODO
+		if (rt == 0 ) break;
+		if (strncmp ( (char *)"telnet", cl->service, 6 ) == 0){
+			// filter telnet data out
+			rt = com_filter_telnet( comp,  &ptr[cl->saved_len], rt );   ///////////////////////  we need to figure out how to do all of this back in com2net
+		}
+#endif	// TODO
 		if ( rt < 0 )
 		{
 			if ( errno == EAGAIN || errno == EWOULDBLOCK )
@@ -332,11 +342,12 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 				return AF_ERRNO;
 			}
 		}
-//		else if ( rt == 0 )
-//		{
-//			// peer performed and order shutdown
+		else if ( rt == 0 )
+		{
+			// peer performed an order shutdown
 //			return AF_SOCKET;
-//		}
+			break;
+		}
 		else // rt > 0
 		{
 			// We got something
