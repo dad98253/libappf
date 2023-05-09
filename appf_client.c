@@ -21,6 +21,31 @@
 
 #include <appf.h>
 
+#define MAXDECODE	250
+
+typedef struct _comport {
+	int              fd;
+	char            *dev;
+	int              speed;
+	char            *logfile;
+	FILE            *logfh;
+	int              tcpport;
+	af_server_t      comserver;
+	af_server_cnx_t *cnx;
+	int              telnet_state;
+	int		 		 inout;
+	char			*remote;
+	af_client_t      comclient;
+	char			*prompt;
+	char			*commands;
+	int				numprompts;
+	unsigned int 	connect_timo;	/* connect timeout */
+	unsigned int 	cmd_timo;		/* command timeout */
+	char			decoded[MAXDECODE];
+} comport;
+
+extern int com_filter_telnet( void *comp, unsigned char *buf, int len );
+
 int _af_client_connect_timeout( af_client_t *client, int timeout_msec )
 {
 	int                 flags, error, c, ret = 0;
@@ -294,6 +319,8 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 	char *ptr;
 	int   rlen;
 
+	comport *coms = (comport*)cl->extra_data;
+
 	if ( len )
 	{
 		// If we get a buffer then use the pointer and
@@ -329,7 +356,7 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 		if (rt == 0 ) break;
 		if (strncmp ( (char *)"telnet", cl->service, 6 ) == 0){
 			// filter telnet data out
-			rt = com_filter_telnet( comp,  &ptr[cl->saved_len], rt );   ///////////////////////  we need to figure out how to do all of this back in com2net
+			rt = com_filter_telnet( cl->extra_data,  (unsigned char *)&ptr[cl->saved_len], rt );   ///////////////////////  we need to figure out how to do all of this back in com2net
 		}
 #endif	// TODO
 		if ( rt < 0 )
@@ -345,7 +372,9 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 		else if ( rt == 0 )
 		{
 			// peer performed an order shutdown
-//			return AF_SOCKET;
+			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "peer %s performed an order shutdown",coms->remote);
+			// jck			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "%s has no bytes to process - ignoringn",coms->remote);
+			return AF_SOCKET;
 			break;
 		}
 		else // rt > 0
@@ -357,31 +386,34 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 
 			ptr[rt] = 0;	// NULL terminate
 
-			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "client read bytes %d ptr (%s) -- now check for prompt", rt, ptr );
+			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "client read bytes %d ptr (%s)", rt, ptr );
 
 			rtlen = rt;
-			if ( _af_client_prompt_detect( cl, ptr, &rtlen ) )
-			{
-				// found prompt
-				if ( len )
+			if ( coms->numprompts ) {
+				af_log_print(APPF_MASK_CLIENT+LOG_INFO, " -- now check for prompt" );
+				if ( _af_client_prompt_detect( cl, ptr, &rtlen ) )
 				{
-					// update length
-					*len += rtlen;
-					// remove prompt from data.
-					ptr[rtlen] = 0;
+					// found prompt
+					if ( len )
+					{
+						// update length
+						*len += rtlen;
+						// remove prompt from data.
+						ptr[rtlen] = 0;
+					}
+					(coms->numprompts)--;
+					// everything is good
+					return AF_OK;
 				}
-				// everything is good
-				return AF_OK;
-			}
-			else // No prompt or partial prompt, keep going.
-			{
-				if ( len )
+				else // No prompt or partial prompt, keep going.
 				{
-					/* update len with new chars read or re-injected from cache */
-					*len += rtlen;
-				}	
+					if ( len )
+					{
+						/* update len with new chars read or re-injected from cache */
+						*len += rtlen;
+					}
+				}
 			}
-
 			// If we have less than a prompt left, we are full.
 			if ( rt >= rlen - 1 - cl->prompt_len )
 			{
@@ -418,7 +450,7 @@ int af_client_read_timeout( af_client_t *cl, char *buf, int *len, int timeout )
 	int tdiff = 0, to;
 	struct pollfd pfds[1];
 
-	af_log_print(APPF_MASK_CLIENT+LOG_INFO, "af_client_read buf %p len %d timeout %d", (void *)buf, len?*len:0, timeout );
+//	af_log_print(APPF_MASK_CLIENT+LOG_INFO, "af_client_read_timeout buf %p len %d timeout %d", (void *)buf, len?*len:0, timeout );
 	// Check if the app passed in a buffer
 	if ( buf && len )
 	{
@@ -451,7 +483,7 @@ int af_client_read_timeout( af_client_t *cl, char *buf, int *len, int timeout )
 		{
 			if ( pfds[0].revents & POLLIN )
 			{
-				af_log_print(APPF_MASK_CLIENT+LOG_INFO, "do_read buf %p len %d rlen %d", (void *)ptr, len?*len:0, rlen );
+//				af_log_print(APPF_MASK_CLIENT+LOG_INFO, "do_read buf %p len %d rlen %d", (void *)ptr, len?*len:0, rlen );
 				rt = af_client_read_socket( cl, len, &ptr, &rlen );
 				if ( rt != AF_TIMEOUT )
 					return rt;

@@ -173,6 +173,7 @@ typedef struct _af_daemon_s {
 } af_daemon_t;
 
 typedef struct _af_server_s af_server_t;
+typedef struct _af_client_s af_client_t;
 typedef struct _af_server_cnx_s af_server_cnx_t;
 
 struct _af_server_cnx_s {
@@ -212,7 +213,7 @@ struct _af_server_s {
 };
 
 
-typedef struct _af_client_s 
+struct _af_client_s
 {
 	char                *service;  // Specifiy /etc/services name
 	int                  port;     // TCP port
@@ -225,10 +226,12 @@ typedef struct _af_client_s
 	int                  prompt_len;
 	char                 saved[MAX_PROMPT];
 	int                  saved_len;
+	void				*extra_data;
+	int					 filter_telnet;
 
 	struct _af_client_s *next;
 
-} af_client_t;
+};
 
 typedef struct _af_client_cmd_s {
 	struct _af_client_s *next;
