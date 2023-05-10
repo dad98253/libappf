@@ -20,7 +20,7 @@
 /*****************************************************************************/
 
 #include <appf.h>
-#include <sys/timerfd.h>
+//#include <sys/timerfd.h>
 #include <sys/sysinfo.h>
 #include <time.h>
 
@@ -101,6 +101,12 @@ void _af_timer_handle_event( af_poll_t *ap );
 
 void af_timer_reset_fd( void )
 {
+/* jck	this routine and its associated timer functions do not appear to be called by the
+//      libappf library and I don't use them in com2net. The timerfd_... family of routines
+//      are gnulib specific and will not appear on other unix flavors. In addition, they
+//	were added to gnulib well after Redhat Linux 7.0 (the target system in my ham shack)
+//	was released. So, commenting this code out has no effect on me...
+
 	af_timer_t         *timer;
 	struct timespec     now;
 	struct itimerspec   tm;
@@ -176,6 +182,7 @@ void af_timer_reset_fd( void )
 		timerfd_settime( _af_daemon->timers.fd, 0, &tm, NULL );
 		_af_daemon->timers.timeout.tv_sec = 0;
 	}
+jck */
 }
 
 void _af_timer_handle_event( af_poll_t *ap )

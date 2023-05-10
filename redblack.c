@@ -47,12 +47,10 @@
 #include <time.h>
 #include <netdb.h>
 #include <syslog.h>
-#include <ifaddrs.h>
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/syslog.h>
