@@ -44,7 +44,6 @@ typedef struct _comport {
 	char			decoded[MAXDECODE];
 } comport;
 
-extern int com_filter_telnet( void *comp, unsigned char *buf, int len );
 
 int _af_client_connect_timeout( af_client_t *client, int timeout_msec )
 {
@@ -315,13 +314,13 @@ int _af_client_prompt_detect( af_client_t *det, char *buf, int *len )
 int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 {
 	int   i, rt, rtlen;
-	char  rbuf[1024];
+	char  rbuf[10240];
 	char *ptr;
 	int   rlen;
 
 	comport *coms = (comport*)cl->extra_data;
 
-	if ( len )
+	if ( *len )
 	{
 		// If we get a buffer then use the pointer and
 		ptr  = *pptr;
@@ -387,7 +386,10 @@ int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen )
 			ptr[rt] = 0;	// NULL terminate
 
 			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "client read bytes %d ptr (%s)", rt, ptr );
-
+			// write to comm
+			if ( coms->fd > 0 && strlen(ptr) ) {
+				write( coms->fd, ptr, strlen(ptr) );
+			}
 			rtlen = rt;
 			if ( coms->numprompts ) {
 				af_log_print(APPF_MASK_CLIENT+LOG_INFO, " -- now check for prompt" );
@@ -456,7 +458,7 @@ int af_client_read_timeout( af_client_t *cl, char *buf, int *len, int timeout )
 	{
 		ptr = buf;
 		rlen = *len - 1 - cl->prompt_len; /* allow data shift up to prompt sz bytes */;
-		*len = 0;
+		*len = 0;	///////////////////   WHY?
 	}
 	else
 	{
