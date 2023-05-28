@@ -31,7 +31,38 @@
 #define DEFAULT_CONNECT_TIMO	5
 #define DEFAULT_CMD_TIMO	10
 #define DEFAULT_PORT		23
+#define MAXDECODE	250
+#define MAXCOMS 128
+#define YESNO(x) ( (x) ? ("Yes") : ("No") )
+#define ONOFF(x) ( (x) ? ("On") : ("Off") )
 
+#define CLOGIN		2
+#define SSET		1
+
+
+typedef struct _comport {
+	int              fd;
+	char            *dev;
+	int              speed;
+	char            *logfile;
+	FILE            *logfh;
+	int              tcpport;
+	af_server_t      comserver;
+	af_server_cnx_t *cnx;
+	int              telnet_state;
+	int		 		 inout;
+	char			*remote;
+	af_client_t      comclient;
+	char			*prompt;
+	char			*commands;
+	char			*password;
+	int				numprompts;
+	unsigned int 	connect_timo;	/* connect timeout */
+	unsigned int 	cmd_timo;		/* command timeout */
+	char			decoded[MAXDECODE];
+} comport;
+
+comport coms[2];
 
 typedef struct _connect
 {
@@ -94,7 +125,61 @@ tcli_t tcli = {
 		current:0
 		}
 };
+// the NetLink call back function vector:
+typedef void (*CommandCallBack_t)(int destination, int subcommand, unsigned char * data, int datasize );
+CommandCallBack_t CommandCallBack[256] = { NULL };
+void Register_CommandCallBack(unsigned char command, CommandCallBack_t ptr);
+#define REGISTER_CALLBACK(command,function) Register_CommandCallBack(command, (CommandCallBack_t)function)
+#define GET_CALLBACK(command) (CommandCallBack[command])
+#define PING_CMD				0x01
+#define READPOWEROUTLET_CMD		0x20
 
+int send_NetLink_command(int destination,int command,int subcommand,unsigned char * data, unsigned int datasize);
+int send_NetLink_login(char * password);
+int process_NetLink_message(af_client_t *cl, char *buf, int *len);
+int decode_NetLink_command(int *destination,int *command,int *subcommand,unsigned char * raw, unsigned int len, unsigned char ** data, int * datasize, unsigned char ** nextpacket);
+unsigned char * c2p ( const int i );
+
+unsigned char ctempjk;
+int retjk;
+
+void Register_CommandCallBack(unsigned char command, CommandCallBack_t ptr) {
+	CommandCallBack[command] = ptr;
+	printf("Callback routine registered for NetLink command number 0x%02x\n", command);
+}
+
+CommandCallBack_t ProcessPing (int destination, int subcommand, unsigned char * envelope, int datasize ) {
+	// let's interogate switch settings on each ping...
+	if ( subcommand == 1 ) {
+		printf("Interrogating Power Outlet status...\n");
+		send_NetLink_command(0,0x20,0x02,c2p(1), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(2), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(3), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(4), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(5), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(6), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(7), 1);
+		send_NetLink_command(0,0x20,0x02,c2p(8), 1);
+	}
+	return(0);
+}
+
+CommandCallBack_t ProcessPowerOutletStatus (int destination, int subcommand, unsigned char * envelope, int datasize ) {
+	char ctemp[260];
+	// print the switch setting
+	if ( datasize > 255 ) goto ret1;
+	if ( subcommand == 0x10 ) {			// Response to a command
+		if ( datasize < 9 ) goto ret1;
+		strncpy(ctemp,(const char *)(envelope+2),4);
+		ctemp[4] = '\000';
+		printf ("Power outlet %u is %s, cycle time is %s seconds\n",*envelope,ONOFF(*(envelope+1)),ctemp );
+	}
+ret1:
+	return(0);
+}
+
+
+unsigned char * c2p ( const int i ) { ctempjk = (unsigned char)i; return(&ctempjk);}
 
 void usage(void)
 {
@@ -271,13 +356,18 @@ void handle_cmd_timeout(void *ignore)	//	where is this used??
 void handle_server_socket_event( af_poll_t *af )
 {
 	int status;
+	int i;
 	char buf[MAX_SOCK_READ_BUF];
 	int len = MAX_SOCK_READ_BUF;
 
 	//af_log_print(LOG_DEBUG, "%s: revents %d", __func__, revents);
 
 	// Read with 1 ms timeout since we are using the poll loop to get here.
-	status = af_client_read_timeout( tcli.conn.client, buf, &len, 1 );
+	if ( strcmp(tcli.conn.client->prompt,"") ) {
+		status = af_client_read_timeout( tcli.conn.client, buf, &len, 1 );
+	} else {
+		status = af_client_read_raw_timeout( tcli.conn.client, buf, &len, 1 );
+	}
 
 	//af_log_print( LOG_DEBUG, "%s: client_read() returned %d, len=%d", __func__, status, len );
 
@@ -293,6 +383,7 @@ void handle_server_socket_event( af_poll_t *af )
 	case AF_SOCKET:
 		//  DCLI server probably died...
 		tcli.bailout = TRUE;
+		len = 0;
 		break;
 	case AF_OK:
 		// tcli prompt was detected
@@ -301,26 +392,40 @@ void handle_server_socket_event( af_poll_t *af )
 		break;
 	default:
 		af_log_print(LOG_ERR, "%s: oops, unexpected status %d from client_read", __func__, status);
+		tcli.bailout = TRUE;
+		len = 0;
 		break;
 	}
 
 	// Handle any data we read from the sock
-	if ( len > 0 )
-	{
-		buf[len] = 0;
-		af_log_print(LOG_DEBUG, "%s: server rx %d bytes", __func__, len);
+	if ( len > 0 ) {
+		if ( strcmp(tcli.conn.client->prompt,"") )
+		{
+			buf[len] = 0;
+			af_log_print(LOG_DEBUG, "%s: server rx %d bytes", __func__, len);
 
-		if (tcli.opt.dump_hex == TRUE)
-		{
-			dump_as_hex( buf, len );
+			if (tcli.opt.dump_hex == TRUE)
+			{
+				dump_as_hex( buf, len );
+				fflush(stdout);
+			}
+			else
+			{
+				printf("%s",buf);
+				fflush(stdout);
+			}
+		} else {										// NetLink clients come here
+			printf("received %i bytes : (0x)",len);
+			for ( i = 0; i < len; i++) {
+				printf(" %02x", (unsigned char)(*(buf+i)));
+			}
+			printf("\n");
 			fflush(stdout);
+			process_NetLink_message(tcli.conn.client, buf, &len);
 		}
-		else
-		{
-			printf("%s",buf);
-			fflush(stdout);
-		}
-	}
+	}	// len > 0
+
+	return;
 }
 
 
@@ -574,57 +679,68 @@ int main(int argc, char *argv[])
 		af_log_print(LOG_DEBUG, "connected to server (port=%d)", tcli.conn.client->port );
 	}
 
-	// detect the initial prompt
-	if ( af_client_get_prompt( tcli.conn.client, tcli.conn.connect_timo*1000 ) )	// Note: this is a macro for af_client_read_timeout (see appf.h)
-	{
-		af_log_print(LOG_ERR, "failed to connect to detect prompt (\"%s\") within timeout (%d secs)", tcli.conn.client->prompt, tcli.conn.connect_timo );
-		myexit(1);
-	}
-	
-	// Queue up the commands
-
-	if ( strlen(tcli.opt.filename) )
-	{
-		FILE *fh;
-		char buf[2048];
-		char *ptr;
-
-		if ( (fh=fopen( tcli.opt.filename, "r" )) == NULL )
+	if ( strcmp(tcli.conn.client->prompt,"") ) {
+		// detect the initial prompt
+		if ( af_client_get_prompt( tcli.conn.client, tcli.conn.connect_timo*1000 ) )	// Note: this is a macro for af_client_read_timeout (see appf.h)
 		{
-			af_log_print(LOG_ERR, "failed to open command file %s", tcli.opt.filename );
+			af_log_print(LOG_ERR, "failed to detect prompt (\"%s\") within timeout (%d secs)", tcli.conn.client->prompt, tcli.conn.connect_timo );
 			myexit(1);
 		}
 
-		while ( !feof(fh) )
+		// Queue up the commands
+
+		if ( strlen(tcli.opt.filename) )
 		{
-			if ( fgets( buf, 2048, fh ) == NULL )
-				break;
+			FILE *fh;
+			char buf[2048];
+			char *ptr;
 
-			// Remove new line.
-			ptr = strchr( buf, '\n' );
-			if ( !ptr )
-				continue;
-			*ptr = 0;
+			if ( (fh=fopen( tcli.opt.filename, "r" )) == NULL )
+			{
+				af_log_print(LOG_ERR, "failed to open command file %s", tcli.opt.filename );
+				myexit(1);
+			}
 
-			// clear white space at the begining of any command
-			ptr = buf;
-			while ( isspace(*ptr) ) ptr++;
+			while ( !feof(fh) )
+			{
+				if ( fgets( buf, 2048, fh ) == NULL )
+					break;
 
-			// check for valid line.
-			if ( strlen(ptr) < 1 )
-				continue;
-			if ( buf[0] == '#' )
-				continue;
-			if ( buf[0] == ';' )
-				continue;
+				// Remove new line.
+				ptr = strchr( buf, '\n' );
+				if ( !ptr )
+					continue;
+				*ptr = 0;
 
-			tcli.cmd.part[tcli.cmd.num++] = strdup( buf );
+				// clear white space at the begining of any command
+				ptr = buf;
+				while ( isspace(*ptr) ) ptr++;
+
+				// check for valid line.
+				if ( strlen(ptr) < 1 )
+					continue;
+				if ( buf[0] == '#' )
+					continue;
+				if ( buf[0] == ';' )
+					continue;
+
+				tcli.cmd.part[tcli.cmd.num++] = strdup( buf );
+			}
 		}
-	}
 
-	// Send the first command
-	if ( send_tcli_command() )
-		myexit(1);
+		// Send the first command
+		if ( send_tcli_command() ) myexit(1);
+	} else {
+		// This is a NetLink run
+		// fix up client data for NetLink use
+		coms->remote = lpServerName;
+		tcli.conn.client->extra_data = (void*) coms;
+		// set any required NetLink callback functions
+		REGISTER_CALLBACK(PING_CMD, ProcessPing);
+		REGISTER_CALLBACK(READPOWEROUTLET_CMD, ProcessPowerOutletStatus);
+		// send the password
+		if ( send_NetLink_login(tcli.cmd.part[tcli.cmd.current]) ) myexit(1);
+	}
 
 	af_poll_add( tcli.conn.client->sock, POLLIN, handle_server_socket_event, &tcli );
 
@@ -636,3 +752,314 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
+int send_NetLink_command(int destination,int command,int subcommand,unsigned char * data, unsigned int datasize) {
+	unsigned int sum = 0;
+	unsigned char * datapacket;
+	unsigned char * ptr;
+	int i;
+	int status;
+	int exitval;
+	int packetsize;
+
+	packetsize = datasize + 5;
+	ptr = datapacket = (unsigned char *) calloc(packetsize + 3 , 1);
+	*ptr = 0xfe;							// header
+	ptr++;
+	*ptr = (unsigned char)(datasize +3);	// length
+	ptr++;
+	*ptr = (unsigned char)(destination);	// Destination
+	ptr++;
+	*ptr = (unsigned char)(command);		// Command
+	ptr++;
+	*ptr = (unsigned char)(subcommand);		// Sub Command
+	ptr++;
+	if (datasize) {
+		for (i = 0; i<datasize; i++) {
+			*ptr = *(data+i);				// next byte of data
+			ptr++;
+		}
+	}
+	for ( i=0; i<packetsize; i++ ) {
+		sum+=*(datapacket+i);
+	}
+	*ptr = sum & 0x7f;
+	ptr++;
+	*ptr = 0xff;
+
+
+
+
+		af_log_print(LOG_DEBUG, "%s: sending NetLink command \"%i\", sub command \"%i\" to %i with %i data bytes", __func__, command, subcommand, destination, datasize );
+
+		// show user the command we're sending unless suppressed
+		if (tcli.opt.hide_prompt == FALSE)
+		{
+
+			printf("sending : (0x)");
+			for (i=0; i< (packetsize+2); i++) {
+				printf(" %02x", *(datapacket+i));
+			}
+			printf("\n");
+			fflush(stdout);
+		}
+
+		status = af_client_send_raw( tcli.conn.client, datapacket, (size_t)(packetsize+2) );
+		/*
+		client_send can return:
+			AF_TIMEOUT
+			AF_ERRNO
+			AF_SOCKET
+			AF_OK
+		*/
+
+		switch ( status )
+		{
+		case AF_OK:
+			// command was sent successfully
+			tcli.conn.busy = TRUE;
+			exitval = 0;
+			break;
+		default:
+			//  send failed
+			af_log_print(LOG_ERR, "%s: client_send returned %d (cmd=%s)", __func__, status, tcli.cmd.part[tcli.cmd.current] );
+			exitval = 1;
+			break;
+		}
+
+
+
+	free(datapacket);
+	return(exitval);
+}
+int send_NetLink_login(char * password) {
+	char * userpassword = NULL;
+	userpassword = (char*)malloc(strlen(password)+7);
+	strcpy(userpassword,"user|");
+	strcat(userpassword,password);
+	if ( send_NetLink_command(0,CLOGIN,SSET,(unsigned char *)userpassword, strlen(userpassword)) ) {
+		free(userpassword);
+		return(1);
+	}
+	free(userpassword);
+	return(0);
+}
+
+int process_NetLink_message(af_client_t *cl, char *buf, int *len) {
+	int destination,command,subcommand,datasize;
+	unsigned char *envelope;
+	unsigned char *nextpacket;
+	char *tempbuf;
+	int templen;
+	int iret = -1;
+	tempbuf = buf;
+	templen = *len;
+
+	while ( iret < 0 ) {
+		iret = decode_NetLink_command( &destination, &command, &subcommand, (unsigned char *)tempbuf, (unsigned int)(templen), &envelope, &datasize, &nextpacket);
+		if ( iret > 0 ) return(iret);
+		printf( " destination, command, subcommand - %i, %i, %i\n",destination, command, subcommand);
+		switch ( (unsigned char)command )
+			{
+				case 0x10 :	// NACK
+					printf("NACK received - error detected at device\n");
+					switch ( *envelope )
+					{
+					case 0x01 :	//	 Bad CRC on previous command
+						printf("Bad CRC on previous command\n");
+						break;
+					case 0x02 :	//	 Bad Length on previous command
+						printf("Bad Length on previous command\n");
+						break;
+					case 0x03 :	//   Bad Escape sequence on previous command
+						printf("Bad Escape sequence on previous command\n");
+						break;
+					case 0x04 :	//   Previous command invalid
+						printf("Previous command invalid\n");
+						break;
+					case 0x05 :	//   Previous sub-command invalid
+						printf("Previous sub-command invalid\n");
+						break;
+					case 0x06 :	//   Previous command incorrect byte count
+						printf("Previous command incorrect byte count\n");
+						break;
+					case 0x07 :	//   Invalid data bytes in previous command
+						printf("Invalid data bytes in previous command\n");
+						break;
+					case 0x08 :	//   Invalid Credentials (note: need to login again)
+						printf("Invalid Credentials (note: need to login again)\n");
+						break;
+					case 0x10 :	//   Unknown Error
+						printf("Unknown Error\n");
+						break;
+					case 0x11 :	//   Access Denied (EPO)
+						printf("Access Denied (EPO)\n");
+						break;
+					default:
+						printf("un-recognized error number (\'0x%02x\')\n",*envelope);
+						return(-99);
+					}
+					break;
+				case 0x01 :	// Ping/Pong
+					if ( subcommand == 1 ) {
+						printf("Ping...(Sending Pong)\n");
+						// send Pong
+						send_NetLink_command(0,0x01,0x10,(unsigned char *)"", 0);
+					}
+					break;
+				case 0x02 :	// login/response
+					if ( subcommand == 0x10 && datasize == 4) {
+						if ( *envelope == 0 ) {
+							printf("login rejected...\n");
+						} else if ( *envelope == 1 ) {
+							printf("login successful...\n");
+						} else {
+							printf("unrecognized login response...\n");
+						}
+					}
+					break;
+				case 0x20 :	// Read/write Power Outlet
+					break;
+				case 0x30 :	// Read/write Dry Contact
+					break;
+				case 0x21 :	// Read/write Outlet name
+					break;
+				case 0x31 :	// Read/write Contact name
+					break;
+				case 0x22 :	// Read Outlet count
+					break;
+				case 0x32 :	// Read Contact count
+					break;
+				case 0x36 :	// Sequencing command
+					break;
+				case 0x23 :	// Energy Management Command
+					break;
+				case 0x37 :	// Emergency Power Off Command
+					break;
+				case 0x40 :	// Log Alerts Commands
+					break;
+				case 0x41 :	// Log Status Commands
+					break;
+					// Sensor Value Commands:
+				case 0x50 :	// Kilowatt Hours
+					break;
+				case 0x51 :	// Peak Voltage
+					break;
+				case 0x52 :	// RMS Voltage Changes
+					break;
+				case 0x53 :	// Peak Load
+					break;
+				case 0x54 :	// RMS Load
+					break;
+				case 0x55 :	// Temperature
+					break;
+				case 0x56 :	// Wattage
+					break;
+				case 0x57 :	// Power Factor
+					break;
+				case 0x58 :	// Thermal Load
+					break;
+				case 0x59 :	// Surge Protection State
+					break;
+				case 0x60 :	// Energy Management State
+					break;
+				case 0x61 :	// Occupancy State
+					break;
+					// Threshold Commands:
+				case 0x70 :	// Low Voltage Threshold
+					break;
+				case 0x71 :	// High Voltage Threshold
+					break;
+				case 0x73 :	// Max Load Current
+					break;
+				case 0x74 :	// Min Load Current
+					break;
+				case 0x76 :	// Max Temperature
+					break;
+				case 0x77 :	// Min Temperature
+					break;
+					// Log stuff:
+				case 0x80 :	// Log Entry Read
+					break;
+				case 0x81 :	// Get Log Count
+					break;
+				case 0x82 :	// Clear Log
+					break;
+					// Product Rating and Information:
+				case 0x90 :	// Part Number
+					break;
+				case 0x91 :	// Product Amp Hour Rating
+					break;
+				case 0x93 :	// Product Surge Existence
+					break;
+				case 0x94 :	// Current IP Address
+					break;
+				case 0x95 :	// MAC Address
+					break;
+
+				default:
+					return(-99);
+					break;
+			}
+// process command callbacks
+		if ( CommandCallBack[command] ) GET_CALLBACK(command) ( destination, subcommand, envelope, datasize );
+// are there more commands to process in this record?
+		if ( iret < 0 ) {
+			templen -= ( nextpacket - (unsigned char *)tempbuf );
+			tempbuf = (char *)nextpacket;
+		}
+	}
+
+	return(1);
+}
+
+int decode_NetLink_command(int *destination,int *command,int *subcommand,unsigned char * raw, unsigned int len, unsigned char ** data, int * datasize, unsigned char ** nextpacket) {
+	unsigned int sum = 0;
+	unsigned char * datapacket;
+	unsigned char chksum;
+	int i;
+	int packetsize;
+	*nextpacket = NULL;
+
+	if ( len < 7 ) {					// minimum length
+		printf ("Not a NetLink message\n");
+		return(1);
+	}
+	*datasize = (int)(*(raw+1));			// datasize
+
+	packetsize = *datasize + 2;
+	// check checksum
+	if (packetsize > 0) {
+		for ( i=0; i<packetsize; i++ ) {
+			sum+=*(raw+i);
+		}
+		chksum = sum & 0x7f;
+	}
+	if ( chksum != *(raw+packetsize) ) {	// checksum
+		printf ("Bad message checksum, calculated = 0x%02x, read = 0x%02x\n",chksum , *(raw+packetsize) );
+		return(2);
+	}
+	if ( *raw != 0xfe ) {					// header
+		printf ("Bad NetLink message header\n");
+		return(3);
+	}
+	if ( *(raw+packetsize+1) != 0xff ) {	// tail
+		printf ("Bad NetLink message tail character\n");
+		return(4);
+	}
+	if ( *(raw+1) != (unsigned char)( len - 4 ) ) {	// length
+		*nextpacket = raw + packetsize + 2;
+	}
+
+
+	datapacket = raw + 2;
+	*destination = (int)(*datapacket);		// destination
+	datapacket++;
+	*command = (int)(*datapacket);			// command
+	datapacket++;
+	*subcommand = (int)(*datapacket);		// sub command
+	datapacket++;
+	*data = datapacket;						// data
+
+	if ( *nextpacket ) return(-1);
+	return(0);
+}

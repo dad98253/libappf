@@ -301,6 +301,8 @@ void af_client_disconnect( af_client_t *client );
 int af_client_read_socket( af_client_t *cl, int *len, char **pptr, int *prlen );
 int af_client_read_timeout( af_client_t *cl, char *buf, int *len, int timeout );
 int af_client_send( af_client_t *cl, char *cmd );
+int af_client_send_raw( af_client_t *cl, unsigned char *cmd, size_t	cmd_len );
+int af_client_read_raw_timeout( af_client_t *cl, char *buf, int *len, int timeout );
 
 #define af_client_get_prompt( x, y ) af_client_read_timeout( x, NULL, NULL, y )
 

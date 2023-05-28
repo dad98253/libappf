@@ -38,6 +38,7 @@ typedef struct _comport {
 	af_client_t      comclient;
 	char			*prompt;
 	char			*commands;
+	char			*password;
 	int				numprompts;
 	unsigned int 	connect_timo;	/* connect timeout */
 	unsigned int 	cmd_timo;		/* command timeout */
@@ -560,6 +561,195 @@ int af_client_send( af_client_t *cl, char *cmd )
 	if ( rt != cmd_len )
 	{
 		return AF_SOCKET;
+	}
+
+	return AF_OK;
+}
+
+int af_client_send_raw( af_client_t *cl, unsigned char *cmd, size_t	cmd_len )
+{
+	int rt;
+
+	rt = send( cl->sock, cmd, cmd_len, MSG_DONTWAIT );
+
+	if ( rt < 0 )
+	{
+		if ( errno == EAGAIN || errno == EWOULDBLOCK )
+			return AF_TIMEOUT;
+		else
+			return AF_ERRNO;
+
+	}
+	if ( rt != cmd_len )
+	{
+		return AF_SOCKET;
+	}
+
+	return AF_OK;
+}
+
+int af_client_read_socket_raw( af_client_t *cl, int *len, char **pptr, int *prlen )
+{
+	int   rt, rtlen;
+	char  rbuf[10240];
+	char *ptr;
+	int   rlen;
+
+	comport *coms = (comport*)cl->extra_data;
+
+	if ( *len )
+	{
+		// If we get a buffer then use the pointer and
+		ptr  = *pptr;
+		rlen = *prlen;
+	}
+	else
+	{
+		ptr  = rbuf;
+		rlen = sizeof(rbuf);
+	}
+
+	// Just in case they passed in a buffer smaller than prompt size
+	if ( rlen <= 0 )
+	{
+		af_log_print(APPF_MASK_CLIENT+LOG_INFO, "do_read buffer too small %d bytes, len %d", rlen, len?*len:0 );
+		return AF_BUFFER;
+	}
+
+	do
+	{
+		// Read new data
+		rt = recv( cl->sock, ptr, rlen, MSG_DONTWAIT );
+		af_log_print(APPF_MASK_CLIENT+LOG_DEBUG, "recv returned %d, for read max %d", rt, rlen );
+
+		if ( rt < 0 )
+		{
+			if ( errno == EAGAIN || errno == EWOULDBLOCK )
+				break;
+			else
+			{
+				// An error occurred.
+				return AF_ERRNO;
+			}
+		}
+		else if ( rt == 0 )
+		{
+			// peer performed an order shutdown
+			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "peer %s performed an order shutdown",coms->remote);
+			// jck			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "%s has no bytes to process - ignoringn",coms->remote);
+			return AF_SOCKET;
+			break;
+		}
+		else // rt > 0
+		{
+			// We got something
+			// free the cache
+			rt += cl->saved_len;
+			cl->saved_len = 0;
+
+			af_log_print(APPF_MASK_CLIENT+LOG_INFO, "client read bytes %d", rt );
+			// write to comm
+//			if ( coms->fd > 0 && strlen(ptr) ) {
+//				write( coms->fd, ptr, strlen(ptr) );
+//			}
+			*len = rtlen = rt;
+
+
+		} // rt >0
+
+		// Didn't get the prompt or fill the buffer. (might be some data in there.
+		*prlen = rlen;
+		*pptr = ptr;
+
+	} while ( 0 );
+
+	// Got to return a NOT done code.
+	return AF_TIMEOUT;
+}
+
+
+int af_client_read_raw_timeout( af_client_t *cl, char *buf, int *len, int timeout )
+{
+	int rt, pin;
+	int rlen;
+	char *ptr;
+	struct timespec now, then;
+	int tdiff = 0, to;
+	struct pollfd pfds[1];
+
+//	af_log_print(APPF_MASK_CLIENT+LOG_INFO, "af_client_read_timeout buf %p len %d timeout %d", (void *)buf, len?*len:0, timeout );
+	// Check if the app passed in a buffer
+	if ( buf && len )
+	{
+		ptr = buf;
+		rlen = *len; /* allow data shift up to prompt sz bytes */;
+//		*len = 0;	///////////////////   WHY?
+	}
+	else
+	{
+		ptr = NULL;
+		rlen = 0;
+	}
+
+
+	af_timer_now( &then );
+	to = timeout;
+
+	do
+	{
+		pfds[0].fd = cl->sock;
+		pfds[0].events = POLLIN;
+		pfds[0].revents = 0;
+
+		// Can't use <0 timeout or poll goes infinite
+		if ( to <= 0 )
+			to = 1;
+
+		pin = poll( pfds, 1, to );
+		if ( pin > 0 )
+		{
+			if ( pfds[0].revents & POLLIN )
+			{
+//				af_log_print(APPF_MASK_CLIENT+LOG_INFO, "do_read buf %p len %d rlen %d", (void *)ptr, len?*len:0, rlen );
+				rt = af_client_read_socket_raw( cl, len, &ptr, &rlen );
+				if ( rt != AF_TIMEOUT )
+					return rt;
+			}
+			else // revents has no POLLIN
+			{
+				// Probably kind of socket failure
+				return AF_SOCKET;
+			}
+		}
+		else if ( pin < 0 )
+		{
+			if ( errno != EAGAIN )
+				return AF_ERRNO;
+
+		}
+		else // pin == 0
+		{
+			// timed out
+		}
+
+		af_timer_now( &now );
+
+		tdiff = timediff(now, then);
+		// Check for clock change
+		if ( tdiff <= 0 )
+		{
+			af_timer_now( &then );
+			tdiff = 0;
+		}
+
+		to = timeout - tdiff;
+
+	} while ( tdiff < timeout );
+
+	// If we had a timeout, we timed out before getting a prompt
+	if ( timeout )
+	{
+		return AF_TIMEOUT;
 	}
 
 	return AF_OK;
