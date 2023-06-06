@@ -1,7 +1,7 @@
 
 #CC = gcc
-#CFLAGS += -fPIC -Wall -O3 -g -I.
-CFLAGS += -fPIC -Wall -O0 -g3 -I. -DDEBUG -UHAVE_CONFIG_H
+CFLAGS += -fPIC -Wall -O3 -g -I. -UHAVE_CONFIG_H
+#CFLAGS += -fPIC -Wall -O0 -g3 -I. -DDEBUG -UHAVE_CONFIG_H
 
 TARGET_SO = libappf.so
 TARGET_A = libappf.a
