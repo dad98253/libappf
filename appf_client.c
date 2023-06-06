@@ -612,7 +612,7 @@ int af_client_read_socket_raw( af_client_t *cl, int *len, char **pptr, int *prle
 	// Just in case they passed in a buffer smaller than prompt size
 	if ( rlen <= 0 )
 	{
-		af_log_print(APPF_MASK_CLIENT+LOG_INFO, "do_read buffer too small %d bytes, len %d", rlen, len?*len:0 );
+		af_log_print( LOG_ERR, "do_read buffer too small %d bytes, len %d", rlen, len?*len:0 );
 		return AF_BUFFER;
 	}
 
